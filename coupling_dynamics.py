@@ -1,5 +1,7 @@
 import numpy as np
 
+# Just like the Simulations! https://star-wars-memes.fandom.com/wiki/Just_like_the_simulations!
+
 # From Supplementary Material: A systematic framework for functional connectivity measures section 1.5
 def henon_system(x0, Cij, T):
 	np.random.seed(seed=123456789)
