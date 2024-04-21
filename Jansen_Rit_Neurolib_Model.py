@@ -12,6 +12,22 @@ from neurolib.models.multimodel.builder.base.neural_mass import NeuralMass
 from neurolib.utils.functions import getPowerSpectrum
 from neurolib.utils.stimulus import Input, OrnsteinUhlenbeckProcess, StepInput
 
+JR_DEFAULT_PARAMS = {
+    "A": 3.25,  # mV
+    "B": 22.0,  # mV
+    # `a` and `b` are originally 100Hz and 50Hz
+    "a": 0.1,  # kHz
+    "b": 0.05,  # kHz
+    "v0": 6.0,  # mV
+    # v_max is originally 5Hz
+    "v_max": 0.005,  # kHz
+    "r": 0.56,  # m/V
+    "C": 135.0,
+    # parameter for dummy `r` dynamics
+    "lambda": LAMBDA_SPEED,
+}
+
+
 class UniformlyDistributedNoise(Input):
     """
     Uniformly distributed noise process between two values.
@@ -209,3 +225,78 @@ class JansenRitNode(Node):
         # this function typically defines the coupling between masses
         # within one node, but in our case there is nothing to define
         return []
+    
+
+class JansenRitNetwork(Network):
+    """
+    78 cortical node Jansen-Rit Models to simulate 80 AAL Regions
+    """
+
+    # provide basic attributes as name and label
+    name = "Jansen-Rit Network"
+    label = "JRNet"
+
+    # define which variables are used to sync, i.e. what coupling variables our nodes need
+    sync_variables = [
+        # all nodes are connected via excitatory synapses
+        "network_exc_exc",
+    ]
+
+    # lastly, we need to define what is default output of the network (this has to be the
+    #     variable present in all nodes)
+    # for us it is excitatory firing rates
+    default_output = f"r_mean_EXC"
+    # define all output vars of any interest to us - EXC and INH firing rates
+    output_vars = [f"r_mean_EXC"]
+
+    def __init__(self, connectivity_matrix, delay_matrix, seed=None):
+        # self connections are resolved within nodes, so zeroes at the diagonal
+        assert np.all(np.diag(connectivity_matrix) == 0.0)
+
+        nodes = []
+        for idx in range(80):
+            # init Jansen-Rit node with index seed
+            jr_node = JansenRitNode(seed=seed)
+            jr_node.index = idx
+            # index where the state variables start - for us it is always 0
+            jr_node.idx_state_var = 0
+            # set correct indices for noise input - in JR we have only one noise source
+            jr_node[0].noise_input_idx = [idx]
+            nodes.append(jr_node)
+
+        # now super.__init__ network with these two nodes:
+        super().__init__(
+            nodes=nodes,
+            connectivity_matrix=connectivity_matrix,
+            delay_matrix=delay_matrix,
+        )
+
+    def _sync(self):
+        """
+        Set coupling variables - the ones we defined in `sync_variables`
+        _sync returns a list of tuples where the first element in each tuple is the coupling "symbol"
+        and the second is the actual mathematical expression
+        for the ease of doing this, `Network` class contains convenience functions for this:
+            - _additive_coupling
+            - _diffusive_coupling
+            - _no_coupling
+        here we use additive coupling only
+        """
+        # get indices of coupling variables from all nodes
+        exc_indices = [
+            next(
+                iter(
+                    node.all_couplings(
+                        mass_indices=node.excitatory_masses.tolist()
+                    )
+                )
+            )
+            for node in self
+        ]
+        assert len(exc_indices) == len(self)
+        return (
+            # basic EXC <-> EXC coupling
+            # within_node_idx is a list of len 78 (because we have 78 nodes)
+            # with indices of coupling variables within the respective state vectors
+            self._additive_coupling(within_node_idx=exc_indices, symbol="network_exc_exc", connectivity=self.connectivity) + super()._sync()
+        )
